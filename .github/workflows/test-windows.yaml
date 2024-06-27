@@ -3,6 +3,9 @@ on:
   schedule:
   - cron: '0 2 * * *'
   workflow_dispatch:
+  push:
+    paths:
+    - .github/workflows/test-windows.yaml
 jobs:
   test:
     name: Test Windows
@@ -12,7 +15,7 @@ jobs:
       matrix:
         include:
         - erlang_version: "24"
-          elixir_version: 1.12.3
+          elixir_version: 1.13.4
     timeout-minutes: 120
     steps:
     - name: CHECKOUT REPOSITORY
@@ -28,38 +31,34 @@ jobs:
     #!     path: "/home/runner/repo-cache/"
     #!     key: repo-cache
     - name: CONFIGURE BAZEL
+      id: configure
       shell: bash
       run: |
-        ERL_PATH="$(which erl)"
-        IEX_PATH="$(which iex)"
-        sed -i"_orig" 's/build --experimental_enable_bzlmod//' .bazelrc
+        if [ -n "${{ secrets.BUILDBUDDY_API_KEY }}" ]; then
+        cat << EOF >> user.bazelrc
+          build:buildbuddy --remote_header=x-buildbuddy-api-key=${{ secrets.BUILDBUDDY_API_KEY }}
+        EOF
+        fi
         cat << EOF >> user.bazelrc
           startup --output_user_root=C:/tmp
           startup --windows_enable_symlinks
           build --enable_runfiles
-
-          build:buildbuddy --remote_header=x-buildbuddy-api-key=${{ secrets.BUILDBUDDY_API_KEY }}
-
           build:buildbuddy --build_metadata=ROLE=CI
           build:buildbuddy --build_metadata=VISIBILITY=PUBLIC
           build:buildbuddy --remote_instance_name=buildbuddy-io/buildbuddy/ci-windows
           # build:buildbuddy --repository_cache=/home/runner/repo-cache/
           build:buildbuddy --color=yes
           build:buildbuddy --disk_cache=
-
-          build --@rules_erlang//:erlang_version=${{ matrix.erlang_version }}
-          build --@rules_erlang//:erlang_home="${ERL_PATH/\/bin\/erl/}"
-          build --//:elixir_home="${IEX_PATH/\/bin\/iex/}"
-          build --platforms=//bazel/platforms:erlang_external_platform
-          build --extra_execution_platforms=//bazel/platforms:erlang_external_platform
+          build:buildbuddy --noexperimental_remote_cache_compression
+          build:buildbuddy --noexperimental_remote_cache_async
         EOF
-
         bazelisk info release
     - name: RUN TESTS
       shell: cmd
       run: |
         bazelisk test //... ^
           --config=buildbuddy ^
-          --test_tag_filters=-aws,-bats,-starts-background-broker ^
+          --noexperimental_enable_bzlmod ^
+          --test_tag_filters=-aws,-docker,-bats,-starts-background-broker ^
           --build_tests_only ^
           --verbose_failures
